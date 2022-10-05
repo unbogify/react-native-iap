@@ -404,39 +404,51 @@ class RNIapIosSk2iOS15: Sk2Delegate {
         self.transactions[transactionId] = transaction
     }
 
+
+    func handledUpdatedTransaction(_ result: VerificationResult<Transaction>) {
+        do {
+            let transaction = try checkVerified(result)
+            print("found unfinished transaction \(transaction)")
+            self.addTransaction(transaction)
+            // Deliver products to the user.
+            // await self.updateCustomerProductStatus()
+
+            print("self.hasListeners: \(self.hasListeners)")
+            if self.hasListeners {
+                self.sendEvent?("purchase-updated", serialize(transaction))
+                self.sendEvent?("iap-transaction-updated", ["transaction": serialize(transaction)])
+            }
+            // Always finish a transaction.
+            // await transaction.finish()
+            // The transaction is returned to the user. Once it has fullfilled the order,
+            // they can call finishTransaction
+        } catch {
+            // StoreKit has a transaction that fails verification. Don't deliver content to the user.
+            debugMessage("Transaction failed verification")
+            if self.hasListeners {
+                let err = [
+                    "responseCode": IapErrors.E_TRANSACTION_VALIDATION_FAILED.rawValue,
+                    "debugMessage": error.localizedDescription,
+                    "code": IapErrors.E_TRANSACTION_VALIDATION_FAILED.rawValue,
+                    "message": error.localizedDescription
+                ]
+
+                self.sendEvent?("purchase-error", err)
+                self.sendEvent?("iap-transaction-updated", ["error": err])
+            }
+        }
+    }
+
     func listenForTransactions() -> Task<Void, Error> {
         return Task.detached {
             // Iterate through any transactions that don't come from a direct call to `purchase()`.
+            print("searching unfinished transactions")
+            for await result in Transaction.unfinished {
+                self.handledUpdatedTransaction(result)
+            }
+            print("searching updated transactions")
             for await result in Transaction.updates {
-                do {
-                    let transaction = try checkVerified(result)
-                    self.addTransaction(transaction)
-                    // Deliver products to the user.
-                    // await self.updateCustomerProductStatus()
-
-                    if self.hasListeners {
-                        self.sendEvent?("purchase-updated", serialize(transaction))
-                        self.sendEvent?("iap-transaction-updated", ["transaction": serialize(transaction)])
-                    }
-                    // Always finish a transaction.
-                    // await transaction.finish()
-                    // The transaction is returned to the user. Once it has fullfilled the order,
-                    // they can call finishTransaction
-                } catch {
-                    // StoreKit has a transaction that fails verification. Don't deliver content to the user.
-                    debugMessage("Transaction failed verification")
-                    if self.hasListeners {
-                        let err = [
-                            "responseCode": IapErrors.E_TRANSACTION_VALIDATION_FAILED.rawValue,
-                            "debugMessage": error.localizedDescription,
-                            "code": IapErrors.E_TRANSACTION_VALIDATION_FAILED.rawValue,
-                            "message": error.localizedDescription
-                        ]
-
-                        self.sendEvent?("purchase-error", err)
-                        self.sendEvent?("iap-transaction-updated", ["error": err])
-                    }
-                }
+                self.handledUpdatedTransaction(result)
             }
         }
     }
